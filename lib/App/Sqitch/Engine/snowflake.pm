@@ -8,7 +8,7 @@ use DBI;
 use Try::Tiny;
 use App::Sqitch::X qw(hurl);
 use Locale::TextDomain qw(App-Sqitch);
-use App::Sqitch::Types qw(DBH ArrayRef);
+use App::Sqitch::Types qw(DBH ArrayRef HashRef);
 
 extends 'App::Sqitch::Engine';
 
@@ -70,6 +70,35 @@ has _snowsql => (
 
 sub snowsql { @{ shift->_snowsql } }
 
+has _snowcfg => (
+    is      => 'rw',
+    isa     => HashRef,
+    default => sub {
+        return {};
+        eval 'require Config::INI::Reader; 1' or return {};
+        require File::HomeDir;
+        my $hd = File::HomeDir->my_home or return {};
+        require File::Spec;
+        return Config::INI::Reader->read_file(File::Spec->catfile($hd, '.snowsql', 'config'));
+    },
+);
+
+sub username {
+    my $self = shift;
+    if (my $u = $self->SUPER::username) {
+        return $u;
+    }
+
+    return $ENV{SNOWSQL_USER} if $ENV{SNOWSQL_USER};
+    my $cfg = $self->_snowcfg;
+    return 
+}
+
+sub password {
+    my $self = shift;
+    return $self->SUPER::password || $self->_snowcfg->{password};
+}
+
 has dbh => (
     is      => 'rw',
     isa     => DBH,
@@ -110,6 +139,7 @@ has dbh => (
                             "ALTER SESSION SET TIMESTAMP_OUTPUT_FORMAT='YYYY-MM-DD HH24:MI:SS'",
                             "ALTER SESSION SET TIMEZONE='UTC'",
                         );
+                        say $dbh->err;
                         $dbh->set_err(undef, undef) if $dbh->err;
                     };
                     return;
@@ -151,11 +181,13 @@ sub _listagg_format {
 sub initialized {
     my $self = shift;
     return $self->dbh->selectcol_arrayref(q{
-        SELECT true
-          FROM information_schema.tables
-         WHERE TABLE_CATALOG = current_database()
-           AND TABLE_SCHEMA  = ?
-           AND TABLE_NAME    = ?
+        SELECT COUNT(*) > 0 FROM (
+            SELECT true
+              FROM information_schema.tables
+             WHERE TABLE_CATALOG = current_database()
+               AND TABLE_SCHEMA  = ?
+               AND TABLE_NAME    = ?
+        )
     }, undef, $self->registry, 'changes')->[0];
 }
 
